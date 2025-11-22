@@ -73,10 +73,8 @@ namespace SemaphoreApp
                 // Add to waiting list
                 listBoxWaiting.Items.Add(threadInfo.DisplayText);
                 
-                // Try to acquire semaphore slot
-                Thread waitThread = new Thread(() => WaitForSemaphoreSlot(threadId));
-                waitThread.IsBackground = true;
-                waitThread.Start();
+                // Check if we can immediately move to working
+                EnsureWorkingThreadsCount();
             }
         }
 
@@ -89,7 +87,7 @@ namespace SemaphoreApp
             lock (semaphoreLock)
             {
                 // Check if we're within capacity limits
-                int currentlyWorking = currentSemaphoreSlots - availableSlots;
+                int currentlyWorking = GetWorkingThreadsCount();
                 if (currentlyWorking >= currentSemaphoreSlots)
                 {
                     // At or over capacity, release and return
@@ -156,6 +154,97 @@ namespace SemaphoreApp
                 Thread workThread = new Thread(() => WorkThread(threadId));
                 workThread.IsBackground = true;
                 workThread.Start();
+            }
+        }
+
+        private int GetWorkingThreadsCount()
+        {
+            if (InvokeRequired)
+            {
+                int count = 0;
+                Invoke(new Action(() => count = listBoxWorking.Items.Count));
+                return count;
+            }
+            return listBoxWorking.Items.Count;
+        }
+
+        private int GetWaitingThreadsCount()
+        {
+            if (InvokeRequired)
+            {
+                int count = 0;
+                Invoke(new Action(() => count = listBoxWaiting.Items.Count));
+                return count;
+            }
+            return listBoxWaiting.Items.Count;
+        }
+
+        private void EnsureWorkingThreadsCount()
+        {
+            if (InvokeRequired)
+            {
+                Invoke(new Action(() => EnsureWorkingThreadsCount()));
+                return;
+            }
+
+            lock (semaphoreLock)
+            {
+                int currentlyWorking = listBoxWorking.Items.Count;
+                int needed = currentSemaphoreSlots - currentlyWorking;
+
+                if (needed > 0)
+                {
+                    // Need to add threads from waiting list
+                    int waitingCount = listBoxWaiting.Items.Count;
+                    int threadsToAdd = Math.Min(needed, waitingCount);
+                    
+                    for (int i = 0; i < threadsToAdd; i++)
+                    {
+                        if (listBoxWaiting.Items.Count > 0)
+                        {
+                            string waitingText = listBoxWaiting.Items[0].ToString();
+                            int threadId = ExtractThreadId(waitingText);
+                            if (threadId > 0 && threadInfos.ContainsKey(threadId))
+                            {
+                                Thread waitThread = new Thread(() => WaitForSemaphoreSlot(threadId));
+                                waitThread.IsBackground = true;
+                                waitThread.Start();
+                            }
+                        }
+                    }
+                }
+                else if (needed < 0)
+                {
+                    // Need to remove excess threads (oldest first)
+                    int threadsToRemove = -needed;
+                    for (int i = 0; i < threadsToRemove && listBoxWorking.Items.Count > 0; i++)
+                    {
+                        string workingText = listBoxWorking.Items[0].ToString();
+                        int threadId = ExtractThreadId(workingText);
+                        if (threadId > 0 && threadInfos.ContainsKey(threadId))
+                        {
+                            ThreadInfo threadInfo;
+                            lock (lockObject)
+                            {
+                                if (!threadInfos.ContainsKey(threadId)) continue;
+                                threadInfo = threadInfos[threadId];
+                            }
+                            
+                            threadInfo.CancellationTokenSource.Cancel();
+                            threadInfo.IsWorking = false;
+                            
+                            listBoxWorking.Items.RemoveAt(0);
+                            
+                            lock (lockObject)
+                            {
+                                threadInfos.Remove(threadId);
+                            }
+                            
+                            availableSlots++;
+                            semaphore.Release();
+                        }
+                    }
+                }
             }
         }
 
@@ -260,18 +349,8 @@ namespace SemaphoreApp
                 semaphore.Release();
             }
 
-            // Try to move next waiting thread to working
-            if (listBoxWaiting.Items.Count > 0)
-            {
-                string nextWaitingText = listBoxWaiting.Items[0].ToString();
-                int nextThreadId = ExtractThreadId(nextWaitingText);
-                if (nextThreadId > 0 && threadInfos.ContainsKey(nextThreadId))
-                {
-                    Thread nextWaitThread = new Thread(() => WaitForSemaphoreSlot(nextThreadId));
-                    nextWaitThread.IsBackground = true;
-                    nextWaitThread.Start();
-                }
-            }
+            // Ensure working threads count matches slots
+            EnsureWorkingThreadsCount();
         }
 
         private void listBoxWorking_DoubleClick(object sender, EventArgs e)
@@ -310,18 +389,8 @@ namespace SemaphoreApp
                     semaphore.Release();
                 }
 
-                // Try to move next waiting thread to working
-                if (listBoxWaiting.Items.Count > 0)
-                {
-                    string nextWaitingText = listBoxWaiting.Items[0].ToString();
-                    int nextThreadId = ExtractThreadId(nextWaitingText);
-                    if (nextThreadId > 0 && threadInfos.ContainsKey(nextThreadId))
-                    {
-                        Thread nextWaitThread = new Thread(() => WaitForSemaphoreSlot(nextThreadId));
-                        nextWaitThread.IsBackground = true;
-                        nextWaitThread.Start();
-                    }
-                }
+                // Ensure working threads count matches slots
+                EnsureWorkingThreadsCount();
             }
         }
 
@@ -332,6 +401,8 @@ namespace SemaphoreApp
 
             lock (semaphoreLock)
             {
+                currentSemaphoreSlots = newSlots;
+
                 if (difference > 0)
                 {
                     // Increase semaphore slots - release additional slots
@@ -344,75 +415,15 @@ namespace SemaphoreApp
                     {
                         currentSemaphore.Release();
                     }
-
-                    // Move waiting threads to working if slots available
-                    int slotsToFill = Math.Min(additionalSlots, listBoxWaiting.Items.Count);
-                    for (int i = 0; i < slotsToFill; i++)
-                    {
-                        if (listBoxWaiting.Items.Count > 0)
-                        {
-                            string waitingText = listBoxWaiting.Items[0].ToString();
-                            int threadId = ExtractThreadId(waitingText);
-                            if (threadId > 0 && threadInfos.ContainsKey(threadId))
-                            {
-                                Thread waitThread = new Thread(() => WaitForSemaphoreSlot(threadId));
-                                waitThread.IsBackground = true;
-                                waitThread.Start();
-                            }
-                        }
-                    }
                 }
                 else if (difference < 0)
                 {
-                    // Decrease semaphore slots - remove oldest working threads first
-                    int threadsToRemove = Math.Min(-difference, listBoxWorking.Items.Count);
-                    for (int i = 0; i < threadsToRemove; i++)
-                    {
-                        if (listBoxWorking.Items.Count > 0)
-                        {
-                            string workingText = listBoxWorking.Items[0].ToString();
-                            int threadId = ExtractThreadId(workingText);
-                            if (threadId > 0 && threadInfos.ContainsKey(threadId))
-                            {
-                                ThreadInfo threadInfo = threadInfos[threadId];
-                                threadInfo.CancellationTokenSource.Cancel();
-                                threadInfo.IsWorking = false;
-                                
-                                listBoxWorking.Items.RemoveAt(0);
-                                
-                                lock (lockObject)
-                                {
-                                    threadInfos.Remove(threadId);
-                                }
-                            }
-                        }
-                    }
-
-                    // If still need to reduce more, remove from waiting list (oldest first)
-                    int remainingReduction = -difference - threadsToRemove;
-                    for (int i = 0; i < remainingReduction && listBoxWaiting.Items.Count > 0; i++)
-                    {
-                        string waitingText = listBoxWaiting.Items[0].ToString();
-                        int threadId = ExtractThreadId(waitingText);
-                        if (threadId > 0 && threadInfos.ContainsKey(threadId))
-                        {
-                            ThreadInfo threadInfo = threadInfos[threadId];
-                            threadInfo.CancellationTokenSource.Cancel();
-                            
-                            listBoxWaiting.Items.RemoveAt(0);
-                            
-                            lock (lockObject)
-                            {
-                                threadInfos.Remove(threadId);
-                            }
-                        }
-                    }
-
-                    // Adjust available slots
+                    // Decrease semaphore slots - adjust available slots
                     availableSlots = Math.Max(0, availableSlots + difference);
                 }
 
-                currentSemaphoreSlots = newSlots;
+                // Ensure working threads count matches new slot count
+                EnsureWorkingThreadsCount();
             }
         }
 
