@@ -49,6 +49,11 @@ namespace SemaphoreApp
             {
                 listBoxCreated.Items.Add(threadInfo.DisplayText);
             }
+
+            // Start counter thread that increments every second
+            Thread counterThread = new Thread(() => CounterThread(threadId));
+            counterThread.IsBackground = true;
+            counterThread.Start();
         }
 
         private void listBoxCreated_DoubleClick(object sender, EventArgs e)
@@ -154,7 +159,7 @@ namespace SemaphoreApp
             }
         }
 
-        private void WorkThread(int threadId)
+        private void CounterThread(int threadId)
         {
             ThreadInfo threadInfo;
             lock (lockObject)
@@ -163,7 +168,7 @@ namespace SemaphoreApp
                 threadInfo = threadInfos[threadId];
             }
 
-            while (!threadInfo.CancellationTokenSource.Token.IsCancellationRequested && threadInfo.IsWorking)
+            while (!threadInfo.CancellationTokenSource.Token.IsCancellationRequested)
             {
                 Thread.Sleep(1000); // Wait 1 second
 
@@ -175,35 +180,77 @@ namespace SemaphoreApp
                     if (!threadInfos.ContainsKey(threadId)) break;
                     threadInfo.Counter++;
                 }
-                
-                // Update display in working list
+
+                // Update display in all lists
                 if (InvokeRequired)
                 {
-                    Invoke(new Action(() =>
-                    {
-                        lock (lockObject)
-                        {
-                            if (!threadInfos.ContainsKey(threadId)) return;
-                            int index = listBoxWorking.Items.IndexOf(threadInfo.DisplayText);
-                            if (index >= 0)
-                            {
-                                listBoxWorking.Items[index] = threadInfo.DisplayText;
-                            }
-                        }
-                    }));
+                    Invoke(new Action(() => UpdateThreadDisplay(threadId)));
                 }
                 else
                 {
-                    lock (lockObject)
+                    UpdateThreadDisplay(threadId);
+                }
+            }
+        }
+
+        private void UpdateThreadDisplay(int threadId)
+        {
+            lock (lockObject)
+            {
+                if (!threadInfos.ContainsKey(threadId)) return;
+                ThreadInfo threadInfo = threadInfos[threadId];
+                string displayText = threadInfo.DisplayText;
+                string searchPattern = $"Thread {threadId}";
+
+                // Update in created list
+                for (int i = 0; i < listBoxCreated.Items.Count; i++)
+                {
+                    string item = listBoxCreated.Items[i].ToString();
+                    if (item.StartsWith(searchPattern))
                     {
-                        if (!threadInfos.ContainsKey(threadId)) return;
-                        int index = listBoxWorking.Items.IndexOf(threadInfo.DisplayText);
-                        if (index >= 0)
-                        {
-                            listBoxWorking.Items[index] = threadInfo.DisplayText;
-                        }
+                        listBoxCreated.Items[i] = displayText;
+                        break;
                     }
                 }
+
+                // Update in waiting list
+                for (int i = 0; i < listBoxWaiting.Items.Count; i++)
+                {
+                    string item = listBoxWaiting.Items[i].ToString();
+                    if (item.StartsWith(searchPattern))
+                    {
+                        listBoxWaiting.Items[i] = displayText;
+                        break;
+                    }
+                }
+
+                // Update in working list
+                for (int i = 0; i < listBoxWorking.Items.Count; i++)
+                {
+                    string item = listBoxWorking.Items[i].ToString();
+                    if (item.StartsWith(searchPattern))
+                    {
+                        listBoxWorking.Items[i] = displayText;
+                        break;
+                    }
+                }
+            }
+        }
+
+        private void WorkThread(int threadId)
+        {
+            ThreadInfo threadInfo;
+            lock (lockObject)
+            {
+                if (!threadInfos.ContainsKey(threadId)) return;
+                threadInfo = threadInfos[threadId];
+            }
+
+            // Work thread just waits while the thread is working
+            // Counter is incremented by CounterThread
+            while (!threadInfo.CancellationTokenSource.Token.IsCancellationRequested && threadInfo.IsWorking)
+            {
+                Thread.Sleep(100);
             }
 
             // Release semaphore slot
