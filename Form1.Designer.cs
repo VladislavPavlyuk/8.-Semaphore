@@ -152,6 +152,7 @@ namespace SemaphoreApp
             this.Controls.Add(this.listBoxWorking);
             this.Controls.Add(this.listBoxWaiting);
             this.Controls.Add(this.listBoxCreated);
+            this.Icon = new System.Drawing.Icon("app.ico");
             this.Name = "Form1";
             this.Text = "Semaphore Thread Manager";
             this.FormClosing += new System.Windows.Forms.FormClosingEventHandler(this.Form1_FormClosing);
